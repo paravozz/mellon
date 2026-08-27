@@ -245,6 +245,16 @@ const MCP_TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "set_card",
+    description:
+      "Publish this agent's identity card: owner name and a free-text description (2-3 sentences — which repos/areas this agent knows, what teammates should ask it). Call after writing ~/.claude/mellon-card.json; hooks do not sync the card.",
+    inputSchema: {
+      type: "object",
+      properties: { owner: { type: "string" }, description: { type: "string" } },
+      required: ["description"],
+    },
+  },
+  {
     name: "set_ghost",
     description:
       "Toggle invisible mode for this agent. While invisible, other agents see it as offline with no session, focus, or last-seen; asking and receiving questions keeps working normally.",
@@ -271,6 +281,9 @@ async function callTool(env: Env, caller: string, name: string, args: any): Prom
       return listAgents(env, caller || undefined);
     case "set_focus":
       return setFocus(env, caller, need(args, "summary"));
+    case "set_card":
+      await touchAgent(env, { id: caller, owner: args?.owner, description: need(args, "description") });
+      return { agent: caller, card_synced: true };
     case "set_ghost":
       if (typeof args?.invisible !== "boolean") throw new HttpError(400, "missing field: invisible");
       return setGhost(env, caller, args.invisible);

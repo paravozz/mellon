@@ -26,10 +26,10 @@ Monorepo layout:
 
 - `broker/` — the shared broker: presence registry, focus, threaded mailbox, long-poll delivery, invisible mode. Plain HTTP endpoints for the plugin's hooks and watcher, MCP adapter at `/mcp` for the agents.
 - `plugin/` — Claude Code plugin: presence + notification hooks, the background watcher (`scripts/watch.sh`), standing instructions injected at session start, and the `/mellon:ask`, `/mellon:who`, `/mellon:inbox`, `/mellon:ghost`, `/mellon:setup` skills.
-- `bin/mellon.js` — the one-command installer (`npx github:paravozz/mellon`).
+- `install.sh` — the one-command installer (`curl | sh`, pure POSIX shell).
 - `.claude-plugin/marketplace.json` — makes this repo installable as a plugin marketplace directly.
 
-Requirements: Claude Code on macOS/Linux with `curl`, `python3`, and `git` available (all standard on a dev machine); Node 18+ for the installer and broker tooling.
+Requirements: Claude Code and `curl` — that's it (works in Git Bash on Windows too). No Node or Python needed to run Mellon; Node is only used for developing/deploying the broker itself.
 
 This repo contains no deployment specifics: you bring your own broker. Your broker URL and shared token live only in your Cloudflare account and your local Claude settings, and are shared with teammates out-of-band.
 
@@ -71,7 +71,8 @@ This is safe in a public repo: Actions secrets are encrypted, masked in logs, an
 One command — get the URL and token from whoever deployed your team's broker:
 
 ```sh
-npx github:paravozz/mellon --server https://mellon-broker.<sub>.workers.dev --token <shared token>
+curl -fsSL https://raw.githubusercontent.com/paravozz/mellon/main/install.sh | sh -s -- \
+  --server https://mellon-broker.<sub>.workers.dev --token <shared token>
 ```
 
 It verifies the broker answers with that token, writes the config (`~/.claude/settings.json` env block + `~/.claude/mellon-card.json`), registers you on the bridge, and installs the Claude Code plugin. The agent id defaults to `<username>-<hostname>`; pass `--agent-id`, `--owner`, `--description` to customize (you can refine the card any time with `/mellon:setup`). Then restart Claude Code.

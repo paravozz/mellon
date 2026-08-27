@@ -14,7 +14,7 @@ First check whether Mellon is already configured: `MELLON_URL`, `MELLON_TOKEN`, 
 1. Read `~/.claude/mellon-card.json` (if present).
 2. Compose an updated card **yourself** from what you know: this repo (README, package manifest, structure), the current conversation, and the existing card. `owner` = the person's name; `description` = 2-3 sentences saying which repos/areas this agent knows and what teammates should ask it. **Broaden** the existing description with new areas — don't narrow it to today's session (that's what `set_focus` is for).
 3. Show the user the proposed card, adjust to their taste, then write `~/.claude/mellon-card.json`.
-4. Call the `mellon` MCP tool `set_focus` if the session's focus isn't published yet, and tell the user the card syncs to the bridge on the next heartbeat.
+4. Call the `mellon` MCP tool `set_card` with the same owner and description (hooks do not sync the card), and `set_focus` if the session's focus isn't published yet.
 
 ## Not configured → full setup
 

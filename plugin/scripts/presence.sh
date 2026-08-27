@@ -8,11 +8,15 @@
 #               and tell the agent to handle them (answer if idle, ask the user if mid-task)
 #   down      — SessionEnd: courtesy deregister (crash-safety comes from the TTL, not this)
 #
+# Pure POSIX shell + curl. No Python, no Node — assume the user's machine has
+# nothing beyond what Claude Code itself needs. Message previews are therefore
+# not included in notifications; the agent shows questions verbatim right after
+# via check_inbox, so nothing is lost.
+#
 # Config (env, e.g. via ~/.claude/settings.json "env" block):
 #   MELLON_URL       broker base URL, no trailing slash
 #   MELLON_TOKEN     shared bearer token
 #   MELLON_AGENT_ID  this agent's id, e.g. "alice-frontend"
-# Identity card (prose): ~/.claude/mellon-card.json  {"owner": "...", "description": "..."}
 
 MODE="${1:-beat}"
 STDIN_JSON="$(cat 2>/dev/null || true)"
@@ -24,32 +28,13 @@ if [ -z "$MELLON_URL" ] || [ -z "$MELLON_TOKEN" ] || [ -z "$MELLON_AGENT_ID" ]; 
   exit 0
 fi
 
-command -v python3 >/dev/null 2>&1 || exit 0
 command -v curl >/dev/null 2>&1 || exit 0
 
 build_payload() {
   REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
   BRANCH="$(git branch --show-current 2>/dev/null || true)"
-  MELLON_REPO="$REPO" MELLON_BRANCH="$BRANCH" python3 - <<'PY'
-import json, os, pathlib
-
-card = {}
-try:
-    card = json.loads((pathlib.Path.home() / ".claude" / "mellon-card.json").read_text())
-except Exception:
-    pass
-
-repo = os.environ.get("MELLON_REPO", "")
-branch = os.environ.get("MELLON_BRANCH", "")
-session = repo + (f" @ {branch}" if branch else "")
-
-print(json.dumps({
-    "agent_id": os.environ["MELLON_AGENT_ID"],
-    "owner": card.get("owner") or os.environ.get("USER", ""),
-    "description": card.get("description", ""),
-    "session": session,
-}))
-PY
+  SESSION="$(printf '%s' "$REPO${BRANCH:+ @ $BRANCH}" | tr -d '"\\')"
+  printf '{"agent_id":"%s","session":"%s"}' "$MELLON_AGENT_ID" "$SESSION"
 }
 
 post() {
@@ -65,6 +50,21 @@ peek_inbox() {
     -H "Authorization: Bearer $MELLON_TOKEN" 2>/dev/null
 }
 
+has_mail() {
+  case "$1" in *'"thread_id"'*) return 0 ;; esac
+  return 1
+}
+
+mail_count() {
+  printf '%s' "$1" | grep -o '"thread_id"' | wc -l | tr -d '[:space:]'
+}
+
+mail_senders() {
+  printf '%s' "$1" | tr '{,' '\n\n' \
+    | sed -n 's/.*"from_agent" *: *"\([^"]*\)".*/\1/p' \
+    | sort -u | tr -d '"\\' | tr '\n' '~' | sed 's/~$//; s/~/, /g'
+}
+
 case "$MODE" in
   up)
     post register "$(build_payload)" || true
@@ -76,7 +76,7 @@ This session is connected to Mellon — a presence directory + mailbox linking y
 - Incoming questions (watcher notifications, <mellon-inbox> notes, end-of-turn nudges): ALWAYS show the user the question verbatim — who asked, what they asked — never process the mailbox silently. If you are mid-task with the user, do not derail: show the question briefly and ask whether to answer now or continue. If nothing is in progress, answer immediately via mellon check_inbox from THIS repo's actual code, citing file paths and endpoints, then show the user what you replied. Never answer from assumption. If this session's repo is the wrong place to answer, reply saying which agent/repo could, or tell the user.
 - When you start working on a distinct task, and whenever your focus meaningfully changes, call the mellon set_focus tool with a 1-3 sentence free-text summary (include ticket ids, repo, branch, and progress where relevant).
 - When the user's question depends on another team's code, API, or decisions, call mellon agents to see who is reachable and consider asking them with mellon ask instead of guessing — each teammate's agent answers from its own codebase.
-- If ~/.claude/mellon-card.json is missing or still a stub, write a real card once you understand what this agent covers: {"owner": "<name>", "description": "<2-3 sentences: which repos/areas this agent knows, what teammates should ask it>"}. When you learn new areas in later sessions, broaden the description — never narrow it to just today's work (that's what focus is for). It syncs to the bridge on the next heartbeat.
+- If ~/.claude/mellon-card.json is missing or still a stub, write a real card once you understand what this agent covers: {"owner": "<name>", "description": "<2-3 sentences: which repos/areas this agent knows, what teammates should ask it>"} — then call the mellon set_card tool with the same owner and description (hooks do not sync the card). In later sessions broaden the description when you learn new areas; never narrow it to just today's work (that's what focus is for).
 </mellon>
 EOF
     ;;
@@ -88,53 +88,23 @@ EOF
       touch "$STAMP" 2>/dev/null || true
       ( post heartbeat "$(build_payload)" || true ) &
     fi
-    MELLON_INBOX_JSON="$(peek_inbox || true)" python3 - <<'PY' 2>/dev/null || true
-import json, os
-try:
-    msgs = json.loads(os.environ.get("MELLON_INBOX_JSON") or "{}").get("messages", [])
-except Exception:
-    msgs = []
-if msgs:
-    parts = [f"{m['from_agent']}: \"{m['body'][:150]}\"" for m in msgs[:3]]
-    more = f" (+{len(msgs) - 3} more)" if len(msgs) > 3 else ""
-    print(
-        f"<mellon-inbox>{len(msgs)} unread on the Mellon bridge — {' | '.join(parts)}{more}. "
-        "Show the question(s) verbatim to the user. Mid-task: briefly ask whether to answer now or continue. "
-        "Idle: answer now via mellon check_inbox from this repo's real code.</mellon-inbox>"
-    )
-PY
+    INBOX="$(peek_inbox || true)"
+    has_mail "$INBOX" || exit 0
+    N="$(mail_count "$INBOX")"
+    FROM="$(mail_senders "$INBOX")"
+    echo "<mellon-inbox>${N} unread message(s) from ${FROM:-teammate agents} on the Mellon bridge. Show the question(s) verbatim to the user. Mid-task: briefly ask whether to answer now or continue. Idle: answer now via mellon check_inbox from the actual code of this repo.</mellon-inbox>"
     ;;
 
   stopcheck)
     # Never re-block a continuation we caused (loop guard).
-    printf '%s' "$STDIN_JSON" | python3 -c '
-import json, sys
-try:
-    active = json.load(sys.stdin).get("stop_hook_active", False)
-except Exception:
-    active = False
-sys.exit(1 if active else 0)
-' 2>/dev/null || exit 0
-    MELLON_INBOX_JSON="$(peek_inbox || true)" python3 - <<'PY' 2>/dev/null || true
-import json, os
-try:
-    msgs = json.loads(os.environ.get("MELLON_INBOX_JSON") or "{}").get("messages", [])
-except Exception:
-    msgs = []
-if msgs:
-    parts = [f"{m['from_agent']}: \"{m['body'][:150]}\"" for m in msgs[:3]]
-    more = f" (+{len(msgs) - 3} more)" if len(msgs) > 3 else ""
-    reason = (
-        f"Mellon: {len(msgs)} unread question(s) from teammate agents — {' | '.join(parts)}{more}. "
-        "Show the question(s) verbatim to the user. If you and the user are mid-task or mid-conversation, "
-        "do NOT derail it: end by briefly telling the user a question is waiting and ask whether to answer "
-        "it now. If nothing is in progress, call the mellon check_inbox tool now, answer from this repo's "
-        "actual code with file/endpoint citations (reply via mellon reply), and show the user what you "
-        "replied. If this repo is unrelated to the question, reply saying which agent/repo could answer, "
-        "or tell the user."
-    )
-    print(json.dumps({"decision": "block", "reason": reason}))
-PY
+    case "$STDIN_JSON" in
+      *'"stop_hook_active": true'* | *'"stop_hook_active":true'*) exit 0 ;;
+    esac
+    INBOX="$(peek_inbox || true)"
+    has_mail "$INBOX" || exit 0
+    N="$(mail_count "$INBOX")"
+    FROM="$(mail_senders "$INBOX")"
+    printf '{"decision":"block","reason":"Mellon: %s unread question(s) from %s. Show the question(s) verbatim to the user. If you and the user are mid-task or mid-conversation, do NOT derail: end by briefly telling the user a question is waiting and ask whether to answer it now. If nothing is in progress, call the mellon check_inbox tool now, answer from the actual code of this repo with file/endpoint citations (reply via mellon reply), and show the user what you replied. If this repo is unrelated to the question, reply saying which agent/repo could answer, or tell the user."}\n' "$N" "${FROM:-teammate agents}"
     ;;
 
   down)
