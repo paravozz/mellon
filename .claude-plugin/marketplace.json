@@ -1,0 +1,13 @@
+{
+  "name": "mellon",
+  "owner": {
+    "name": "paravozz"
+  },
+  "plugins": [
+    {
+      "name": "mellon",
+      "source": "./plugin",
+      "description": "Speak, friend, and enter. Presence, focus, and an async mailbox over a shared broker, so teammates' coding agents can ask each other questions directly."
+    }
+  ]
+}

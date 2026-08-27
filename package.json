@@ -1,0 +1,13 @@
+{
+  "name": "mellon",
+  "version": "0.5.0",
+  "description": "Speak, friend, and enter. Agent-to-agent bridge for coding agents: presence, focus, and an async mailbox.",
+  "bin": {
+    "mellon": "bin/mellon.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": "github:paravozz/mellon",
+  "license": "MIT"
+}

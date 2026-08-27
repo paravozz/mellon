@@ -1,0 +1,42 @@
+name: Deploy broker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "broker/**"
+      - ".github/workflows/deploy-broker.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        working-directory: broker
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: broker
+        run: npm run typecheck
+
+      # wrangler.toml is gitignored (bring-your-own-broker); CI materializes it
+      # from the example with the deployer's own database id.
+      - name: Materialize wrangler.toml
+        working-directory: broker
+        run: sed "s/REPLACE_WITH_YOUR_D1_DATABASE_ID/$D1_DATABASE_ID/" wrangler.toml.example > wrangler.toml
+        env:
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+
+      - name: Deploy
+        working-directory: broker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

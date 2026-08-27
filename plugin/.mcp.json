@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mellon": {
+      "type": "http",
+      "url": "${MELLON_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MELLON_TOKEN}",
+        "X-Agent-Id": "${MELLON_AGENT_ID}"
+      }
+    }
+  }
+}
