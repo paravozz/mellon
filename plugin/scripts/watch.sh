@@ -2,7 +2,8 @@
 # Mellon watcher: long-polls the broker's /wait endpoint and exits the moment a
 # message arrives for this agent. Run it as a harness background task — its exit
 # notification is what re-invokes the agent instantly, even in an idle session.
-# The agent re-arms it after every exit.
+# Each arm lasts ~60 min of quiet (or until a message); the agent re-arms it on
+# every exit.
 #
 # Pure POSIX shell + curl; mail detection is a substring check, so it works on
 # machines with no Python or Node at all.
@@ -18,8 +19,13 @@
 command -v curl >/dev/null 2>&1 || { echo "mellon-watch: curl not found"; exit 0; }
 
 WAIT_SECS="${MELLON_WAIT_SECS:-50}"
-CYCLES="${MELLON_WATCH_CYCLES:-25}"
+CYCLES="${MELLON_WATCH_CYCLES:-72}" # 72 x 50s ≈ 60 min; 0 = run for the whole session
 LOCKDIR="${TMPDIR:-/tmp}/mellon-watch-${MELLON_AGENT_ID}.lock"
+
+# Orphan guard: if the session that armed us dies without SessionEnd (crash,
+# closed terminal), our parent goes away — exit so we release the lock instead
+# of holding it forever. This is what makes an unbounded lifetime safe.
+PARENT=$PPID
 
 # mkdir is atomic: exactly one watcher per agent per machine, no races.
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
@@ -36,8 +42,9 @@ echo $$ > "$LOCKDIR/pid"
 trap 'rm -rf "$LOCKDIR"' EXIT
 
 i=0
-while [ "$i" -lt "$CYCLES" ]; do
+while [ "$CYCLES" -eq 0 ] || [ "$i" -lt "$CYCLES" ]; do
   i=$((i + 1))
+  kill -0 "$PARENT" 2>/dev/null || { echo "mellon-watch: parent session gone — exiting"; exit 0; }
   RESP="$(curl -fsS --max-time $((WAIT_SECS + 10)) \
     "$MELLON_URL/wait?agent_id=$MELLON_AGENT_ID&timeout=$WAIT_SECS" \
     -H "Authorization: Bearer $MELLON_TOKEN" 2>/dev/null)" || { sleep 5; continue; }

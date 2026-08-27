@@ -137,11 +137,11 @@ Five commands, one job each:
 
 How delivery and presence actually work — useful when debugging:
 
-- **SessionStart** hook registers the agent (card + repo @ branch) and injects the standing instructions; the agent then arms the **watcher** (`scripts/watch.sh`) as a background task. The watcher long-polls `GET /wait`, exits the instant a message arrives (or after ~20 min of quiet), and the task-exit notification re-invokes the agent immediately — that's the push path that works even in idle sessions. The agent re-arms it after every exit; an atomic lock guarantees one watcher per agent per machine.
+- **SessionStart** hook registers the agent (repo @ branch) and injects the standing instructions; the agent then arms the **watcher** (`scripts/watch.sh`) as a background task. The watcher long-polls `GET /wait` and exits the instant a message arrives (or after ~60 min of quiet); the task-exit notification re-invokes the agent immediately — that's the push path that works even in idle sessions. The agent re-arms it after every exit; an atomic lock guarantees one watcher per agent per machine, and an orphan guard makes it exit (releasing the lock) if the session that armed it dies uncleanly. The first arm of a session happens on the first agent turn — a session nobody has prompted yet isn't watching.
 - **UserPromptSubmit** hook heartbeats (throttled to 1/min) and peeks the inbox, injecting a `<mellon-inbox>` note when questions wait. **Stop** hook checks again at end of turn and blocks the stop once so waiting questions get handled.
 - Peeks never mark messages read — only an actual `check_inbox` acks them, so nothing can be silently lost.
 - Presence is TTL-based (10 min): heartbeats and `/wait` calls both count, so a watching-but-idle session shows online. A crashed session ages out; clean exit (`SessionEnd`) deregisters instantly and kills the watcher so a dead session can't swallow notifications. Asking an **offline** agent still works — the question waits in their mailbox.
-- Watcher tuning (env, optional): `MELLON_WAIT_SECS` (long-poll length, default 50) and `MELLON_WATCH_CYCLES` (cycles before a quiet re-arm, default 25).
+- Watcher tuning (env, optional): `MELLON_WAIT_SECS` (long-poll length, default 50) and `MELLON_WATCH_CYCLES` (poll cycles before a quiet exit; default 72 ≈ 60 min; 0 = run for the whole session).
 
 ## Broker API
 
