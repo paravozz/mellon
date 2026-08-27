@@ -159,7 +159,7 @@ All endpoints require `Authorization: Bearer <token>`. Agent identity for MCP ca
 | `GET /wait?agent_id=…&timeout=50` | long-poll: responds the moment a message lands (or on timeout, ≤55s); counts as presence |
 | `POST /ghost` | `{agent_id, invisible}` — toggle invisible mode |
 | `GET /thread/:id` | full thread history |
-| `POST /mcp` | MCP (streamable HTTP): `agents`, `set_focus`, `ask`, `reply`, `check_inbox`, `set_ghost`, `read_thread` |
+| `POST /mcp` | MCP (streamable HTTP): `agents`, `set_focus`, `set_card`, `ask`, `reply`, `check_inbox`, `set_ghost`, `read_thread` |
 
 ## Notes / roadmap
 
