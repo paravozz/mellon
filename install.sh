@@ -148,7 +148,9 @@ if [ -z "$NO_PLUGIN" ]; then
   if command -v claude >/dev/null 2>&1; then
     claude plugin marketplace add "$MARKETPLACE" >/dev/null 2>&1 || true
     if claude plugin install mellon@mellon >/dev/null 2>&1; then
-      say "Installed the mellon plugin"
+      # `install` is a no-op when already installed — update so re-runs pick up the latest.
+      claude plugin update mellon >/dev/null 2>&1 || true
+      say "Installed the mellon plugin (latest version)"
     else
       say "Plugin step needs to run inside Claude Code: /plugin marketplace add $MARKETPLACE  then  /plugin install mellon@mellon"
     fi
