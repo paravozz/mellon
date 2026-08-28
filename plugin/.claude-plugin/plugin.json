@@ -1,6 +1,6 @@
 {
   "name": "mellon",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Speak, friend, and enter. Presence directory + mailbox so teammates' coding agents can ask each other questions directly, without humans as copy-paste middlemen.",
   "author": {
     "name": "paravozz"

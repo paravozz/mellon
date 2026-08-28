@@ -6,6 +6,8 @@ A presence directory + async mailbox so teammates' coding agents can ask each ot
 
 The protocol is deliberately schema-free: identity, focus, questions, and answers are all plain prose, because the clients are LLMs. Structure lives in the adapters (today: a Claude Code plugin), not on the wire.
 
+The model: one **agent** per person (identity card, one mailbox) with many live **sessions** (one per Claude Code session — each with its own repo @ branch, focus, and presence). Questions can carry a free-text `session_hint` so the teammate's *right* session answers — a hinted message reaches only sessions whose repo/focus matches, and falls back to any session if none does, so mail never strands.
+
 ```
 ┌─────────────────────┐         ┌─────────────────────┐
 │ Alice's Claude Code │         │ Bob's Claude Code   │
@@ -52,6 +54,7 @@ Local development: put `BRIDGE_TOKEN=...` in `broker/.dev.vars`, run `npx wrangl
 
 ```sh
 npx wrangler d1 execute mellon --file=./migrations/0002-invisible.sql --remote
+npx wrangler d1 execute mellon --file=./migrations/0003-sessions.sql --remote
 ```
 
 The code itself redeploys via CI (below) or `npx wrangler deploy`.
@@ -87,6 +90,17 @@ Or do the same from inside Claude Code:
 
 Restart the session afterwards — on start the plugin registers you on the bridge and injects standing instructions, so the agent keeps its focus updated and knows it can ask teammates.
 
+### Multiple bridges, per directory
+
+One machine can be on several bridges — a different broker per team folder. Add `--project <dir>` to the install command and the config goes into `<dir>/.claude/settings.json` instead of the global one, so only sessions started under that directory use that bridge:
+
+```sh
+... install.sh | sh -s -- --server <team-A broker> --token <team-A token> --project ~/Work/team-a
+... install.sh | sh -s -- --server <team-B broker> --token <team-B token> --project ~/Work/team-b
+```
+
+Deploy one broker per team (a Worker instance is free — `wrangler deploy --name mellon-<team>` with its own D1 and token). Leaving a team's folder is the "switch": your presence there decays by TTL on its own — no ghost needed. Keep nothing in the global settings, or use global as your default bridge and projects as overrides (project settings win).
+
 <details>
 <summary>Manual setup (what /mellon:setup writes)</summary>
 
@@ -115,14 +129,14 @@ Restart the session afterwards — on start the plugin registers you on the brid
 
 ## 3. Usage
 
-**Everything routine is automatic.** Each session arms a background watcher that long-polls the broker, so a question fires a notification the moment it arrives — even while the session is idle. Mid-task, the agent shows you the incoming question and asks whether to answer now or keep going; idle, it answers straight away — from the repo, with citations — and shows you both the question and the reply. Focus updates and the agent card are maintained by the agent itself; a watching session counts as online. Nothing is marked read until it's actually answered, and questions to offline agents queue in their mailbox.
+**Everything routine is automatic.** Each session arms its own background watcher that long-polls the broker, so a question routed to that session fires a notification the moment it arrives — even while the session is idle — and sessions it wasn't routed to are never woken. Mid-task, the agent shows you the incoming question and asks whether to answer now or keep going; idle, it answers straight away — from the repo, with citations — and shows you both the question and the reply. Focus is per session; the card is per agent; both are maintained by the agent itself. A watching session counts as online. Nothing is marked read until it's actually answered, and questions to offline agents queue in their mailbox.
 
 Five commands, one job each:
 
 | Command | Use case |
 |---|---|
 | `/mellon:ask bob does /order/summary include the $0 addon line?` | Ask a teammate's agent; the reply comes back automatically |
-| `/mellon:who` | Directory: who's online, where they are, what they're working on |
+| `/mellon:who` | Directory: who's online, each of their sessions, and what each is working on |
 | `/mellon:inbox` | Check and answer waiting questions on demand |
 | `/mellon:ghost on\|off` | Invisible mode: others see you offline with no session/focus; mail still flows both ways |
 | `/mellon:setup` | First-time config, or refresh your agent card from the current session |
@@ -137,7 +151,8 @@ Five commands, one job each:
 
 How delivery and presence actually work — useful when debugging:
 
-- **SessionStart** hook registers the agent (repo @ branch) and injects the standing instructions; the agent then arms the **watcher** (`scripts/watch.sh`) as a background task. The watcher long-polls `GET /wait` and exits the instant a message arrives (or after ~60 min of quiet); the task-exit notification re-invokes the agent immediately — that's the push path that works even in idle sessions. The agent re-arms it after every exit; an atomic lock guarantees one watcher per agent per machine, and an orphan guard makes it exit (releasing the lock) if the session that armed it dies uncleanly. The first arm of a session happens on the first agent turn — a session nobody has prompted yet isn't watching.
+- **SessionStart** hook registers the session (its Claude Code session id is the session key; repo @ branch is its label) and injects the standing instructions, including the session key; the agent then arms the **watcher** (`scripts/watch.sh`) as a background task. The watcher long-polls `GET /wait` scoped to its session and exits the instant a message routed here arrives (or after ~60 min of quiet); the task-exit notification re-invokes the agent immediately — that's the push path that works even in idle sessions. The agent re-arms it after every exit; an atomic lock guarantees one watcher per (agent, broker, session), and an orphan guard makes it exit (releasing the lock) if the session that armed it dies uncleanly. The first arm of a session happens on the first agent turn — a session nobody has prompted yet isn't watching.
+- **Routing**: a message's `session_hint` is matched (case-insensitive substring) against each live session's repo @ branch + focus text. Matching sessions receive it; if no live session matches, the hint is void and any session may take it. Replies are automatically routed back to the session the counterpart last spoke from. `check_inbox` acks exactly the messages it returned — a session can never swallow another session's mail.
 - **UserPromptSubmit** hook heartbeats (throttled to 1/min) and peeks the inbox, injecting a `<mellon-inbox>` note when questions wait. **Stop** hook checks again at end of turn and blocks the stop once so waiting questions get handled.
 - Peeks never mark messages read — only an actual `check_inbox` acks them, so nothing can be silently lost.
 - Presence is TTL-based (10 min): heartbeats and `/wait` calls both count, so a watching-but-idle session shows online. A crashed session ages out; clean exit (`SessionEnd`) deregisters instantly and kills the watcher so a dead session can't swallow notifications. Asking an **offline** agent still works — the question waits in their mailbox.
@@ -149,17 +164,17 @@ All endpoints require `Authorization: Bearer <token>`. Agent identity for MCP ca
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /register`, `POST /heartbeat` | upsert presence: `{agent_id, owner?, description?, session?}` |
-| `POST /deregister` | `{agent_id}` — mark offline now |
-| `POST /focus` | `{agent_id, summary}` — free-text focus |
-| `GET /agents` | directory with online status + focus |
-| `POST /ask` | `{from, to, body, thread_id?}` → `{thread_id}` |
-| `POST /reply` | `{from, thread_id, body}` |
-| `GET /inbox?agent_id=…` | unread messages (marks read; `&ack=0` to peek) |
-| `GET /wait?agent_id=…&timeout=50` | long-poll: responds the moment a message lands (or on timeout, ≤55s); counts as presence |
+| `POST /register`, `POST /heartbeat` | upsert presence: `{agent_id, owner?, description?, session?, session_key?}` |
+| `POST /deregister` | `{agent_id, session_key?}` — end one session (agent stays online while others live) or all |
+| `POST /focus` | `{agent_id, summary, session_key?}` — free-text per-session focus |
+| `GET /agents` | directory: agents with their live sessions (repo @ branch, focus, last seen) |
+| `POST /ask` | `{from, to, body, thread_id?, session_hint?, session_key?}` → `{thread_id}` |
+| `POST /reply` | `{from, thread_id, body, session_key?}` — auto-routed to the counterpart's session |
+| `GET /inbox?agent_id=…&session_key=…` | unread routed to that session (acks exactly what it returns; `&ack=0` to peek) |
+| `GET /wait?agent_id=…&timeout=50&session_key=…` | long-poll: responds the moment a message routed here lands (≤55s); counts as presence |
 | `POST /ghost` | `{agent_id, invisible}` — toggle invisible mode |
 | `GET /thread/:id` | full thread history |
-| `POST /mcp` | MCP (streamable HTTP): `agents`, `set_focus`, `set_card`, `ask`, `reply`, `check_inbox`, `set_ghost`, `read_thread` |
+| `POST /mcp` | MCP (streamable HTTP): `agents`, `set_focus`, `set_card`, `ask`, `reply`, `check_inbox`, `set_ghost`, `read_thread` — session-scoped tools take a `session` argument |
 
 ## Notes / roadmap
 

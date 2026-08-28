@@ -4,18 +4,25 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/paravozz/mellon/main/install.sh | sh -s -- \
 #     --server <broker url> --token <shared token> [--agent-id <id>] \
-#     [--owner <name>] [--description <text>] [--marketplace <ref>] [--no-plugin]
+#     [--project <dir>] [--owner <name>] [--description <text>] \
+#     [--marketplace <ref>] [--no-plugin]
+#
+# --project scopes the bridge to one directory: config goes into
+# <dir>/.claude/settings.json, so only sessions started under that directory
+# use this broker. Run once per team folder to keep separate bridges
+# (e.g. ~/Work/bookmap on the bookmap broker, ~/Work/GLEB on another).
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'mellon: %s\n' "$*" >&2; exit 1; }
 
 SERVER="" TOKEN="" AGENT_ID="" OWNER="" DESC="" OWNER_ARG="" DESC_ARG=""
-MARKETPLACE="paravozz/mellon" NO_PLUGIN=""
+MARKETPLACE="paravozz/mellon" NO_PLUGIN="" PROJECT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --server | --url) SERVER="$2"; shift 2 ;;
     --token) TOKEN="$2"; shift 2 ;;
     --agent-id | --agent_id) AGENT_ID="$2"; shift 2 ;;
+    --project) PROJECT="$2"; shift 2 ;;
     --owner) OWNER="$2"; OWNER_ARG=1; shift 2 ;;
     --description) DESC="$2"; DESC_ARG=1; shift 2 ;;
     --marketplace) MARKETPLACE="$2"; shift 2 ;;
@@ -23,7 +30,7 @@ while [ $# -gt 0 ]; do
     *) die "unknown option: $1" ;;
   esac
 done
-[ -n "$SERVER" ] && [ -n "$TOKEN" ] || die "usage: install.sh --server <broker url> --token <shared token> [--agent-id <id>] — get the URL and token from whoever deployed your team broker"
+[ -n "$SERVER" ] && [ -n "$TOKEN" ] || die "usage: install.sh --server <broker url> --token <shared token> [--agent-id <id>] [--project <dir>] — get the URL and token from whoever deployed your team broker"
 SERVER="$(printf '%s' "$SERVER" | sed 's:/*$::')"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
@@ -47,8 +54,14 @@ case "$CODE" in
   *)   die "broker answered HTTP $CODE — is that a Mellon broker URL?" ;;
 esac
 
-# --- 2. Config into ~/.claude/settings.json ---------------------------------
-CLAUDE_DIR="$HOME/.claude"
+# --- 2. Config into settings.json (global, or the project's) ----------------
+if [ -n "$PROJECT" ]; then
+  [ -d "$PROJECT" ] || die "project directory not found: $PROJECT"
+  CLAUDE_DIR="$PROJECT/.claude"
+  say "Scoping this bridge to $PROJECT (sessions started there use it)"
+else
+  CLAUDE_DIR="$HOME/.claude"
+fi
 mkdir -p "$CLAUDE_DIR"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
