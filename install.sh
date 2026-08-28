@@ -129,9 +129,14 @@ else
 fi
 
 # --- 4. Register on the bridge so teammates see you immediately --------------
+# Push owner/description only when explicitly given: a re-run must never
+# overwrite a richer agent-authored card on the broker with generated defaults.
+REG_OWNER=""; REG_DESC=""
+[ -n "$OWNER_ARG" ] && REG_OWNER="$OWNER"
+[ -n "$DESC_ARG" ] && REG_DESC="$DESC"
 if curl -fsS --max-time 10 -X POST "$SERVER/register" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d "{\"agent_id\":\"$AGENT_ID\",\"owner\":\"$(json_escape "$OWNER")\",\"description\":\"$(json_escape "$DESC")\",\"session\":\"\"}" \
+  -d "{\"agent_id\":\"$AGENT_ID\",\"owner\":\"$(json_escape "$REG_OWNER")\",\"description\":\"$(json_escape "$REG_DESC")\",\"session\":\"\"}" \
   >/dev/null 2>&1; then
   say "Registered \"$AGENT_ID\" on the bridge"
 else
